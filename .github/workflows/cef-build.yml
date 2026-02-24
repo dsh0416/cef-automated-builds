@@ -239,10 +239,26 @@ jobs:
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Configure sccache backend
+      - name: Configure sccache
         shell: bash
         run: |
           set -euo pipefail
+
+          sccache_cmd=""
+          if [[ -n "${SCCACHE_PATH:-}" && -x "${SCCACHE_PATH:-}" ]]; then
+            sccache_cmd="${SCCACHE_PATH}"
+          elif command -v sccache >/dev/null 2>&1; then
+            sccache_cmd="$(command -v sccache)"
+          fi
+
+          if [[ -z "${sccache_cmd}" ]]; then
+            echo "USE_SCCACHE=false" >> "${GITHUB_ENV}"
+            echo "SCCACHE unavailable on this runner, continue without compiler cache."
+            exit 0
+          fi
+
+          echo "USE_SCCACHE=true" >> "${GITHUB_ENV}"
+          echo "SCCACHE_CMD=${sccache_cmd}" >> "${GITHUB_ENV}"
           echo "SCCACHE_DIR=${{ steps.paths.outputs.sccache_dir }}" >> "${GITHUB_ENV}"
           echo "SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE}" >> "${GITHUB_ENV}"
           if [[ "${RUNNER_MODE}" == "shared" ]]; then
@@ -250,13 +266,15 @@ jobs:
           else
             echo "SCCACHE_GHA_ENABLED=false" >> "${GITHUB_ENV}"
           fi
+          "${sccache_cmd}" --version
 
       - name: Warm up sccache
+        if: ${{ env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
-          "${SCCACHE_PATH:-sccache}" --start-server || true
-          "${SCCACHE_PATH:-sccache}" --zero-stats || true
+          "${SCCACHE_CMD}" --start-server || true
+          "${SCCACHE_CMD}" --zero-stats || true
 
       - name: Fetch automate-git.py
         shell: bash
@@ -276,7 +294,11 @@ jobs:
           fi
 
           export GIT_CACHE_PATH="${{ steps.paths.outputs.git_cache_dir }}"
-          export GN_DEFINES="${CEF_GN_DEFINES} ${CEF_FAST_GN_DEFINES} cc_wrapper=\"sccache\""
+          if [[ "${USE_SCCACHE:-false}" == "true" ]]; then
+            export GN_DEFINES="${CEF_GN_DEFINES} ${CEF_FAST_GN_DEFINES} cc_wrapper=\"${SCCACHE_CMD}\""
+          else
+            export GN_DEFINES="${CEF_GN_DEFINES} ${CEF_FAST_GN_DEFINES}"
+          fi
 
           checkout_args=()
           if [[ -n "${{ steps.cef.outputs.checkout }}" ]]; then
@@ -296,12 +318,12 @@ jobs:
             ${{ matrix.build_flag }}
 
       - name: Show sccache stats
-        if: ${{ always() }}
+        if: ${{ always() && env.USE_SCCACHE == 'true' }}
         shell: bash
         run: |
           set +e
-          "${SCCACHE_PATH:-sccache}" --show-stats
-          "${SCCACHE_PATH:-sccache}" --stop-server
+          "${SCCACHE_CMD}" --show-stats
+          "${SCCACHE_CMD}" --stop-server
 
       - name: Upload binary distrib
         uses: actions/upload-artifact@v4

@@ -59,6 +59,7 @@ Note: workflow uses `--build-target="cefsimple cefclient"` because `--client-dis
 ## Build acceleration (sccache + git cache)
 
 The workflow enables `sccache` by default and injects `cc_wrapper="sccache"` into GN.
+If `sccache` is unavailable on a runner, workflow automatically falls back to normal compilation (no cache) instead of failing.
 
 It also configures `GIT_CACHE_PATH` to speed up `gclient`/`git` fetch.
 
