@@ -327,7 +327,7 @@ jobs:
           for artifact_dir in release-assets/*; do
             if [[ -d "${artifact_dir}" ]]; then
               base="$(basename "${artifact_dir}")"
-              tar -C "${artifact_dir}" -czf "release-bundles/${base}.tar.gz" .
+              tar -C "${artifact_dir}" -cjf "release-bundles/${base}.tar.bz2" .
             fi
           done
           ls -lh release-bundles
@@ -340,4 +340,4 @@ jobs:
           generate_release_notes: true
           prerelease: false
           files: |
-            release-bundles/*.tar.gz
+            release-bundles/*.tar.bz2

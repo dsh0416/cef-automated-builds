@@ -33,7 +33,7 @@ Scheduled trigger runs weekly.
 When `publish_release=true`:
 
 - workflow creates/updates a release tag in the format `cef-<resolved-cef-tag>`
-- all platform artifacts are uploaded as `tar.gz` bundles
+- all platform artifacts are uploaded as `tar.bz2` bundles
 - `cef_version` must be version/tag (`latest` or semver-like), not raw branch number
 
 ## Codec build flags (FFmpeg/H264/H265/AAC)
