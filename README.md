@@ -103,3 +103,7 @@ Windows note:
 
 - workflow enables `git config --global core.longpaths true`
 - on shared Windows runner, cache root is moved to `${RUNNER_TEMP}/cef-cache` to shorten checkout paths
+
+Linux note:
+
+- workflow installs `libcups2-dev` and `pkg-config` to satisfy `cups-config` required by Chromium printing build files
