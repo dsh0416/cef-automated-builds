@@ -11,11 +11,11 @@ on:
         options:
           - shared
           - self-hosted
-      cef_branch:
-        description: "CEF branch number (example: 6533)"
+      cef_version:
+        description: "CEF version/tag/branch (example: 132.3.0 or 6533)"
         required: true
         type: string
-        default: "6533"
+        default: "latest"
   schedule:
     - cron: "0 2 * * 1"
 
@@ -58,7 +58,7 @@ jobs:
 
     env:
       RUNNER_MODE: ${{ github.event.inputs.runner_mode || 'shared' }}
-      CEF_BRANCH: ${{ github.event.inputs.cef_branch || vars.CEF_BRANCH || '6533' }}
+      CEF_VERSION: ${{ github.event.inputs.cef_version || vars.CEF_VERSION || vars.CEF_BRANCH || 'latest' }}
       CEF_GN_DEFINES: ${{ vars.CEF_GN_DEFINES || 'is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome enable_platform_hevc=true enable_hevc_parser_and_hw_decoder=true' }}
       CEF_FAST_GN_DEFINES: ${{ vars.CEF_FAST_GN_DEFINES || 'symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_jumbo_build=true' }}
       SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '80G' }}
@@ -104,12 +104,66 @@ jobs:
           echo "script_path=${script_path}" >> "${GITHUB_OUTPUT}"
 
           echo "RUNNER_MODE=${RUNNER_MODE}"
-          echo "CEF_BRANCH=${CEF_BRANCH}"
+          echo "CEF_VERSION=${CEF_VERSION}"
           echo "CEF_GN_DEFINES=${CEF_GN_DEFINES}"
           echo "CEF_FAST_GN_DEFINES=${CEF_FAST_GN_DEFINES}"
           echo "DOWNLOAD_DIR=${download_dir}"
           echo "GIT_CACHE_DIR=${git_cache_dir}"
           echo "SCCACHE_DIR=${sccache_dir}"
+
+      - name: Resolve CEF version to branch/checkout
+        id: cef
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          input="${CEF_VERSION}"
+          branch=""
+          checkout=""
+
+          if [[ "${input}" =~ ^[0-9]{4,}$ ]]; then
+            # Backward compatibility: numeric input is treated as branch.
+            branch="${input}"
+          else
+            if [[ "${input}" == "latest" ]]; then
+              refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git)"
+            else
+              refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git "refs/tags/${input}*")"
+            fi
+
+            tag="$(
+              printf '%s\n' "${refs}" \
+                | awk '{print $2}' \
+                | sed 's#refs/tags/##' \
+                | sort -V \
+                | tail -n 1
+            )"
+
+            if [[ -z "${tag}" ]]; then
+              echo "Cannot resolve CEF version/tag from input: ${input}" >&2
+              exit 1
+            fi
+
+            checkout="${tag}"
+            chromium_version="$(echo "${tag}" | sed -n 's#.*chromium-\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\).*#\1#p')"
+
+            if [[ -z "${chromium_version}" ]]; then
+              compat_url="https://raw.githubusercontent.com/chromiumembedded/cef/${tag}/CHROMIUM_BUILD_COMPATIBILITY.txt"
+              chromium_checkout="$(curl -fsSL "${compat_url}" | sed -n \"s/.*'chromium_checkout': '\\([^']\\+\\)'.*/\\1/p\")"
+              chromium_version="$(echo "${chromium_checkout}" | sed -n 's#.*\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\).*#\1#p')"
+            fi
+
+            branch="$(echo "${chromium_version}" | cut -d. -f3)"
+          fi
+
+          if [[ -z "${branch}" ]]; then
+            echo "Failed to resolve CEF branch from input: ${input}" >&2
+            exit 1
+          fi
+
+          echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
+          echo "checkout=${checkout}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved CEF input '${input}' -> branch=${branch} checkout=${checkout:-<latest-on-branch>}"
 
       - name: Cache bootstrap and compiler cache (shared runner only)
         if: ${{ env.RUNNER_MODE == 'shared' }}
@@ -119,9 +173,9 @@ jobs:
             ${{ steps.paths.outputs.depot_tools_dir }}
             ${{ steps.paths.outputs.git_cache_dir }}
             ${{ steps.paths.outputs.sccache_dir }}
-          key: cef-bootstrap-${{ matrix.id }}-${{ env.CEF_BRANCH }}-${{ hashFiles('.github/workflows/cef-build.yml') }}
+          key: cef-bootstrap-${{ matrix.id }}-${{ steps.cef.outputs.branch }}-${{ hashFiles('.github/workflows/cef-build.yml') }}
           restore-keys: |
-            cef-bootstrap-${{ matrix.id }}-${{ env.CEF_BRANCH }}-
+            cef-bootstrap-${{ matrix.id }}-${{ steps.cef.outputs.branch }}-
             cef-bootstrap-${{ matrix.id }}-
 
       - name: Setup sccache
@@ -166,10 +220,16 @@ jobs:
           export GIT_CACHE_PATH="${{ steps.paths.outputs.git_cache_dir }}"
           export GN_DEFINES="${CEF_GN_DEFINES} ${CEF_FAST_GN_DEFINES} cc_wrapper=\"sccache\""
 
+          checkout_args=()
+          if [[ -n "${{ steps.cef.outputs.checkout }}" ]]; then
+            checkout_args+=(--checkout="${{ steps.cef.outputs.checkout }}")
+          fi
+
           python "${{ steps.paths.outputs.script_path }}" \
             --download-dir="${{ steps.paths.outputs.download_dir }}" \
             --depot-tools-dir="${{ steps.paths.outputs.download_dir }}/depot_tools" \
-            --branch="${CEF_BRANCH}" \
+            --branch="${{ steps.cef.outputs.branch }}" \
+            "${checkout_args[@]}" \
             --minimal-distrib \
             --client-distrib \
             --no-chromium-history \
@@ -187,7 +247,7 @@ jobs:
       - name: Upload binary distrib
         uses: actions/upload-artifact@v4
         with:
-          name: cef-${{ matrix.id }}-branch-${{ env.CEF_BRANCH }}
+          name: cef-${{ matrix.id }}-branch-${{ steps.cef.outputs.branch }}-${{ steps.cef.outputs.checkout != '' && 'pinned' || 'head' }}
           path: ${{ steps.paths.outputs.download_dir }}/chromium/src/cef/binary_distrib/
           if-no-files-found: error
           retention-days: 7

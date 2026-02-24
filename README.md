@@ -19,9 +19,15 @@ The workflow file is [`/.github/workflows/cef-build.yml`](./.github/workflows/ce
 Manual trigger (`workflow_dispatch`) inputs:
 
 - `runner_mode`: `shared` or `self-hosted`
-- `cef_branch`: CEF branch number (example: `6533`)
+- `cef_version`: CEF version/tag/branch (example: `132.3.0`, full tag, or `6533`)
 
 Scheduled trigger runs weekly.
+
+`cef_version` resolution rules:
+
+- numeric input like `6533`: treated as `--branch=6533`
+- semantic version/tag input like `132.3.0`: resolves latest matching CEF tag and uses `--checkout=<tag>`
+- `latest`: resolves to latest CEF tag
 
 ## Codec build flags (FFmpeg/H264/H265/AAC)
 
