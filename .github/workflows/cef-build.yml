@@ -60,6 +60,11 @@ jobs:
       RUNNER_MODE: ${{ github.event.inputs.runner_mode || 'shared' }}
       CEF_BRANCH: ${{ github.event.inputs.cef_branch || vars.CEF_BRANCH || '6533' }}
       CEF_GN_DEFINES: ${{ vars.CEF_GN_DEFINES || 'is_official_build=true proprietary_codecs=true ffmpeg_branding=Chrome enable_platform_hevc=true enable_hevc_parser_and_hw_decoder=true' }}
+      CEF_FAST_GN_DEFINES: ${{ vars.CEF_FAST_GN_DEFINES || 'symbol_level=0 blink_symbol_level=0 v8_symbol_level=0 use_jumbo_build=true' }}
+      SCCACHE_CACHE_SIZE: ${{ vars.SCCACHE_CACHE_SIZE || '80G' }}
+      SCCACHE_IDLE_TIMEOUT: "0"
+      SCCACHE_DIRECT: "true"
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
     steps:
       - name: Checkout
@@ -85,26 +90,61 @@ jobs:
           fi
 
           download_dir="${base}/${{ matrix.id }}"
+          depot_tools_dir="${download_dir}/depot_tools"
+          git_cache_dir="${base}/git-cache/${{ matrix.id }}"
+          sccache_dir="${base}/sccache/${{ matrix.id }}"
           script_path="${download_dir}/automate-git.py"
 
-          mkdir -p "${download_dir}"
+          mkdir -p "${download_dir}" "${git_cache_dir}" "${sccache_dir}"
 
           echo "download_dir=${download_dir}" >> "${GITHUB_OUTPUT}"
+          echo "depot_tools_dir=${depot_tools_dir}" >> "${GITHUB_OUTPUT}"
+          echo "git_cache_dir=${git_cache_dir}" >> "${GITHUB_OUTPUT}"
+          echo "sccache_dir=${sccache_dir}" >> "${GITHUB_OUTPUT}"
           echo "script_path=${script_path}" >> "${GITHUB_OUTPUT}"
 
           echo "RUNNER_MODE=${RUNNER_MODE}"
           echo "CEF_BRANCH=${CEF_BRANCH}"
           echo "CEF_GN_DEFINES=${CEF_GN_DEFINES}"
+          echo "CEF_FAST_GN_DEFINES=${CEF_FAST_GN_DEFINES}"
           echo "DOWNLOAD_DIR=${download_dir}"
+          echo "GIT_CACHE_DIR=${git_cache_dir}"
+          echo "SCCACHE_DIR=${sccache_dir}"
 
-      - name: Cache CEF workspace (shared runner only)
+      - name: Cache bootstrap and compiler cache (shared runner only)
         if: ${{ env.RUNNER_MODE == 'shared' }}
         uses: actions/cache@v4
         with:
-          path: ${{ steps.paths.outputs.download_dir }}
-          key: cef-${{ matrix.id }}-${{ env.CEF_BRANCH }}-${{ github.run_id }}
+          path: |
+            ${{ steps.paths.outputs.depot_tools_dir }}
+            ${{ steps.paths.outputs.git_cache_dir }}
+            ${{ steps.paths.outputs.sccache_dir }}
+          key: cef-bootstrap-${{ matrix.id }}-${{ env.CEF_BRANCH }}-${{ hashFiles('.github/workflows/cef-build.yml') }}
           restore-keys: |
-            cef-${{ matrix.id }}-${{ env.CEF_BRANCH }}-
+            cef-bootstrap-${{ matrix.id }}-${{ env.CEF_BRANCH }}-
+            cef-bootstrap-${{ matrix.id }}-
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Configure sccache backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "SCCACHE_DIR=${{ steps.paths.outputs.sccache_dir }}" >> "${GITHUB_ENV}"
+          echo "SCCACHE_CACHE_SIZE=${SCCACHE_CACHE_SIZE}" >> "${GITHUB_ENV}"
+          if [[ "${RUNNER_MODE}" == "shared" ]]; then
+            echo "SCCACHE_GHA_ENABLED=true" >> "${GITHUB_ENV}"
+          else
+            echo "SCCACHE_GHA_ENABLED=false" >> "${GITHUB_ENV}"
+          fi
+
+      - name: Warm up sccache
+        shell: bash
+        run: |
+          set -euo pipefail
+          "${SCCACHE_PATH:-sccache}" --start-server || true
+          "${SCCACHE_PATH:-sccache}" --zero-stats || true
 
       - name: Fetch automate-git.py
         shell: bash
@@ -123,7 +163,8 @@ jobs:
             export ${{ matrix.extra_env }}
           fi
 
-          export GN_DEFINES="${CEF_GN_DEFINES}"
+          export GIT_CACHE_PATH="${{ steps.paths.outputs.git_cache_dir }}"
+          export GN_DEFINES="${CEF_GN_DEFINES} ${CEF_FAST_GN_DEFINES} cc_wrapper=\"sccache\""
 
           python "${{ steps.paths.outputs.script_path }}" \
             --download-dir="${{ steps.paths.outputs.download_dir }}" \
@@ -134,6 +175,14 @@ jobs:
             --no-chromium-history \
             --no-debug-build \
             ${{ matrix.build_flag }}
+
+      - name: Show sccache stats
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set +e
+          "${SCCACHE_PATH:-sccache}" --show-stats
+          "${SCCACHE_PATH:-sccache}" --stop-server
 
       - name: Upload binary distrib
         uses: actions/upload-artifact@v4

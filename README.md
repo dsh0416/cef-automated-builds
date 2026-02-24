@@ -35,6 +35,25 @@ The workflow sets:
 
 You can override all GN defines using repository variable `CEF_GN_DEFINES`.
 
+## Build acceleration (sccache + git cache)
+
+The workflow enables `sccache` by default and injects `cc_wrapper="sccache"` into GN.
+
+It also configures `GIT_CACHE_PATH` to speed up `gclient`/`git` fetch.
+
+Default fast-build GN flags:
+
+- `symbol_level=0`
+- `blink_symbol_level=0`
+- `v8_symbol_level=0`
+- `use_jumbo_build=true`
+
+You can override these defaults with repository variable `CEF_FAST_GN_DEFINES`.
+
+Optional repository variable:
+
+- `SCCACHE_CACHE_SIZE` (default: `80G`)
+
 ## Self-hosted runner labels
 
 Expected labels per matrix target:
@@ -51,3 +70,9 @@ Set repository variable `CEF_CACHE_ROOT` to a persistent path (for example `/dat
 If not set, workflow defaults to `${HOME}/cef-cache` on the runner.
 
 `automate-git.py` will reuse this directory and maximize git/depot_tools cache hits across runs.
+
+For best performance on self-hosted runners:
+
+- put `CEF_CACHE_ROOT` on fast SSD/NVMe
+- keep runner machine stable (same path reused over time)
+- avoid cleaning `${CEF_CACHE_ROOT}` unless needed
