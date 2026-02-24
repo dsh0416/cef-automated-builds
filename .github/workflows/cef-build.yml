@@ -16,6 +16,11 @@ on:
         required: true
         type: string
         default: "latest"
+      publish_release:
+        description: "Create/update GitHub Release with build artifacts"
+        required: true
+        type: boolean
+        default: false
   schedule:
     - cron: "0 2 * * 1"
 
@@ -251,3 +256,88 @@ jobs:
           path: ${{ steps.paths.outputs.download_dir }}/chromium/src/cef/binary_distrib/
           if-no-files-found: error
           retention-days: 7
+
+  release:
+    name: Release
+    needs: build
+    if: ${{ github.event_name == 'workflow_dispatch' && fromJSON(github.event.inputs.publish_release || 'false') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      CEF_VERSION: ${{ github.event.inputs.cef_version || vars.CEF_VERSION || vars.CEF_BRANCH || 'latest' }}
+    steps:
+      - name: Resolve release tag
+        id: rel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          input="${CEF_VERSION}"
+          checkout=""
+
+          if [[ "${input}" =~ ^[0-9]{4,}$ ]]; then
+            echo "publish_release=true requires a version/tag input, not a raw branch number (${input})." >&2
+            exit 1
+          fi
+
+          if [[ "${input}" == "latest" ]]; then
+            refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git)"
+          else
+            refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git "refs/tags/${input}*")"
+          fi
+
+          checkout="$(
+            printf '%s\n' "${refs}" \
+              | awk '{print $2}' \
+              | sed 's#refs/tags/##' \
+              | sort -V \
+              | tail -n 1
+          )"
+
+          if [[ -z "${checkout}" ]]; then
+            echo "Cannot resolve release tag from CEF_VERSION=${input}" >&2
+            exit 1
+          fi
+
+          release_tag="cef-${checkout}"
+          release_name="CEF ${checkout}"
+          echo "checkout=${checkout}" >> "${GITHUB_OUTPUT}"
+          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
+          echo "Resolved release: ${release_tag}"
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: cef-*
+          path: release-assets
+
+      - name: List release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          find release-assets -type f | sort
+
+      - name: Pack release bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-bundles
+          for artifact_dir in release-assets/*; do
+            if [[ -d "${artifact_dir}" ]]; then
+              base="$(basename "${artifact_dir}")"
+              tar -C "${artifact_dir}" -czf "release-bundles/${base}.tar.gz" .
+            fi
+          done
+          ls -lh release-bundles
+
+      - name: Create or update release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.rel.outputs.release_tag }}
+          name: ${{ steps.rel.outputs.release_name }}
+          generate_release_notes: true
+          prerelease: false
+          files: |
+            release-bundles/*.tar.gz

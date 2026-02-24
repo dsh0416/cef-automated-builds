@@ -20,6 +20,7 @@ Manual trigger (`workflow_dispatch`) inputs:
 
 - `runner_mode`: `shared` or `self-hosted`
 - `cef_version`: CEF version/tag/branch (example: `132.3.0`, full tag, or `6533`)
+- `publish_release`: whether to create/update GitHub Release and upload binaries
 
 Scheduled trigger runs weekly.
 
@@ -28,6 +29,12 @@ Scheduled trigger runs weekly.
 - numeric input like `6533`: treated as `--branch=6533`
 - semantic version/tag input like `132.3.0`: resolves latest matching CEF tag and uses `--checkout=<tag>`
 - `latest`: resolves to latest CEF tag
+
+When `publish_release=true`:
+
+- workflow creates/updates a release tag in the format `cef-<resolved-cef-tag>`
+- all platform artifacts are uploaded as `tar.gz` bundles
+- `cef_version` must be version/tag (`latest` or semver-like), not raw branch number
 
 ## Codec build flags (FFmpeg/H264/H265/AAC)
 
