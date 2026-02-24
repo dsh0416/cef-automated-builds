@@ -54,6 +54,8 @@ The workflow sets:
 
 You can override all GN defines using repository variable `CEF_GN_DEFINES`.
 
+Note: workflow uses `--build-target="cefsimple cefclient"` because `--client-distrib` requires `cefsimple`.
+
 ## Build acceleration (sccache + git cache)
 
 The workflow enables `sccache` by default and injects `cc_wrapper="sccache"` into GN.

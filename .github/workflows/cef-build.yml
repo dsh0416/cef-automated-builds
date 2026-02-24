@@ -276,6 +276,7 @@ jobs:
             --depot-tools-dir="${{ steps.paths.outputs.download_dir }}/depot_tools" \
             --branch="${{ steps.cef.outputs.branch }}" \
             "${checkout_args[@]}" \
+            --build-target="cefsimple cefclient" \
             --minimal-distrib \
             --client-distrib \
             --no-chromium-history \
