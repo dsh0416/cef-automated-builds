@@ -92,6 +92,10 @@ jobs:
             fi
           else
             base="${GITHUB_WORKSPACE}/.cef-cache"
+            if [[ "${RUNNER_OS}" == "Windows" ]]; then
+              # Keep the path very short on GitHub-hosted Windows to avoid MAX_PATH issues.
+              base="${RUNNER_TEMP}/cef-cache"
+            fi
           fi
 
           download_dir="${base}/${{ matrix.id }}"
@@ -115,6 +119,14 @@ jobs:
           echo "DOWNLOAD_DIR=${download_dir}"
           echo "GIT_CACHE_DIR=${git_cache_dir}"
           echo "SCCACHE_DIR=${sccache_dir}"
+
+      - name: Enable git long paths (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global core.longpaths true
+          git config --global core.longpaths
 
       - name: Resolve CEF version to branch/checkout
         id: cef

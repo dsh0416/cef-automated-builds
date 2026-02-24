@@ -97,3 +97,8 @@ For best performance on self-hosted runners:
 - put `CEF_CACHE_ROOT` on fast SSD/NVMe
 - keep runner machine stable (same path reused over time)
 - avoid cleaning `${CEF_CACHE_ROOT}` unless needed
+
+Windows note:
+
+- workflow enables `git config --global core.longpaths true`
+- on shared Windows runner, cache root is moved to `${RUNNER_TEMP}/cef-cache` to shorten checkout paths
