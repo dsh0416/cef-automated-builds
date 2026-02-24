@@ -122,53 +122,94 @@ jobs:
         run: |
           set -euo pipefail
 
-          input="${CEF_VERSION}"
-          branch=""
-          checkout=""
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from urllib.request import urlopen
 
-          if [[ "${input}" =~ ^[0-9]{4,}$ ]]; then
-            # Backward compatibility: numeric input is treated as branch.
-            branch="${input}"
-          else
-            if [[ "${input}" == "latest" ]]; then
-              refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git)"
-            else
-              refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git "refs/tags/${input}*")"
-            fi
+          input_value = os.environ["CEF_VERSION"].strip()
+          out = os.environ["GITHUB_OUTPUT"]
 
-            tag="$(
-              printf '%s\n' "${refs}" \
-                | awk '{print $2}' \
-                | sed 's#refs/tags/##' \
-                | sort -V \
-                | tail -n 1
-            )"
+          def walk_versions(obj, out_versions):
+            if isinstance(obj, dict):
+              if "cef_version" in obj and isinstance(obj["cef_version"], str):
+                out_versions.add(obj["cef_version"])
+              for v in obj.values():
+                walk_versions(v, out_versions)
+            elif isinstance(obj, list):
+              for v in obj:
+                walk_versions(v, out_versions)
 
-            if [[ -z "${tag}" ]]; then
-              echo "Cannot resolve CEF version/tag from input: ${input}" >&2
-              exit 1
-            fi
+          def parse_version(v):
+            m = re.match(r"^(\d+)\.(\d+)\.(\d+)\+g([0-9a-f]+)\+chromium-(\d+)\.(\d+)\.(\d+)\.(\d+)$", v)
+            if not m:
+              return None
+            return {
+              "cef_major": int(m.group(1)),
+              "cef_minor": int(m.group(2)),
+              "cef_patch": int(m.group(3)),
+              "git_hash": m.group(4),
+              "chromium_major": int(m.group(5)),
+              "chromium_minor": int(m.group(6)),
+              "chromium_branch": int(m.group(7)),
+              "chromium_patch": int(m.group(8)),
+              "raw": v,
+            }
 
-            checkout="${tag}"
-            chromium_version="$(echo "${tag}" | sed -n 's#.*chromium-\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\).*#\1#p')"
+          if re.fullmatch(r"[0-9]{4,}", input_value):
+            with open(out, "a", encoding="utf-8") as f:
+              f.write(f"branch={input_value}\n")
+              f.write("checkout=\n")
+              f.write(f"resolved_version={input_value}\n")
+            print(f"Resolved CEF input '{input_value}' -> branch={input_value} checkout=<latest-on-branch>")
+            sys.exit(0)
 
-            if [[ -z "${chromium_version}" ]]; then
-              compat_url="https://raw.githubusercontent.com/chromiumembedded/cef/${tag}/CHROMIUM_BUILD_COMPATIBILITY.txt"
-              chromium_checkout="$(curl -fsSL "${compat_url}" | sed -n \"s/.*'chromium_checkout': '\\([^']\\+\\)'.*/\\1/p\")"
-              chromium_version="$(echo "${chromium_checkout}" | sed -n 's#.*\([0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+\).*#\1#p')"
-            fi
+          with urlopen("https://cef-builds.spotifycdn.com/index.json") as r:
+            index_json = json.load(r)
 
-            branch="$(echo "${chromium_version}" | cut -d. -f3)"
-          fi
+          versions = set()
+          walk_versions(index_json, versions)
+          parsed = [p for p in (parse_version(v) for v in versions) if p is not None]
+          if not parsed:
+            print("No CEF versions found in spotify index", file=sys.stderr)
+            sys.exit(1)
 
-          if [[ -z "${branch}" ]]; then
-            echo "Failed to resolve CEF branch from input: ${input}" >&2
-            exit 1
-          fi
+          if input_value == "latest":
+            chosen = max(
+              parsed,
+              key=lambda p: (
+                p["cef_major"], p["cef_minor"], p["cef_patch"],
+                p["chromium_major"], p["chromium_minor"], p["chromium_branch"], p["chromium_patch"],
+              ),
+            )
+          else:
+            exact = [p for p in parsed if p["raw"] == input_value]
+            prefix = [p for p in parsed if p["raw"].startswith(input_value + "+g")]
+            candidates = exact or prefix
+            if not candidates:
+              print(f"Cannot resolve CEF version/tag from input: {input_value}", file=sys.stderr)
+              sys.exit(1)
+            chosen = max(
+              candidates,
+              key=lambda p: (
+                p["cef_major"], p["cef_minor"], p["cef_patch"],
+                p["chromium_major"], p["chromium_minor"], p["chromium_branch"], p["chromium_patch"],
+              ),
+            )
 
-          echo "branch=${branch}" >> "${GITHUB_OUTPUT}"
-          echo "checkout=${checkout}" >> "${GITHUB_OUTPUT}"
-          echo "Resolved CEF input '${input}' -> branch=${branch} checkout=${checkout:-<latest-on-branch>}"
+          branch = str(chosen["chromium_branch"])
+          checkout = chosen["git_hash"]
+          resolved = chosen["raw"]
+
+          with open(out, "a", encoding="utf-8") as f:
+            f.write(f"branch={branch}\n")
+            f.write(f"checkout={checkout}\n")
+            f.write(f"resolved_version={resolved}\n")
+
+          print(f"Resolved CEF input '{input_value}' -> version={resolved} branch={branch} checkout={checkout}")
+          PY
 
       - name: Cache bootstrap and compiler cache (shared runner only)
         if: ${{ env.RUNNER_MODE == 'shared' }}
@@ -273,39 +314,93 @@ jobs:
         run: |
           set -euo pipefail
 
-          input="${CEF_VERSION}"
-          checkout=""
+          python - <<'PY'
+          import json
+          import os
+          import re
+          import sys
+          from urllib.request import urlopen
 
-          if [[ "${input}" =~ ^[0-9]{4,}$ ]]; then
-            echo "publish_release=true requires a version/tag input, not a raw branch number (${input})." >&2
-            exit 1
-          fi
+          input_value = os.environ["CEF_VERSION"].strip()
+          out = os.environ["GITHUB_OUTPUT"]
 
-          if [[ "${input}" == "latest" ]]; then
-            refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git)"
-          else
-            refs="$(git ls-remote --tags --refs https://github.com/chromiumembedded/cef.git "refs/tags/${input}*")"
-          fi
+          if re.fullmatch(r"[0-9]{4,}", input_value):
+            print(
+              f"publish_release=true requires a version input (e.g. 145.0.26 or latest), not a raw branch number ({input_value}).",
+              file=sys.stderr,
+            )
+            sys.exit(1)
 
-          checkout="$(
-            printf '%s\n' "${refs}" \
-              | awk '{print $2}' \
-              | sed 's#refs/tags/##' \
-              | sort -V \
-              | tail -n 1
-          )"
+          def walk_versions(obj, out_versions):
+            if isinstance(obj, dict):
+              if "cef_version" in obj and isinstance(obj["cef_version"], str):
+                out_versions.add(obj["cef_version"])
+              for v in obj.values():
+                walk_versions(v, out_versions)
+            elif isinstance(obj, list):
+              for v in obj:
+                walk_versions(v, out_versions)
 
-          if [[ -z "${checkout}" ]]; then
-            echo "Cannot resolve release tag from CEF_VERSION=${input}" >&2
-            exit 1
-          fi
+          def parse_version(v):
+            m = re.match(r"^(\d+)\.(\d+)\.(\d+)\+g([0-9a-f]+)\+chromium-(\d+)\.(\d+)\.(\d+)\.(\d+)$", v)
+            if not m:
+              return None
+            return {
+              "cef_major": int(m.group(1)),
+              "cef_minor": int(m.group(2)),
+              "cef_patch": int(m.group(3)),
+              "git_hash": m.group(4),
+              "chromium_major": int(m.group(5)),
+              "chromium_minor": int(m.group(6)),
+              "chromium_branch": int(m.group(7)),
+              "chromium_patch": int(m.group(8)),
+              "raw": v,
+            }
 
-          release_tag="cef-${checkout}"
-          release_name="CEF ${checkout}"
-          echo "checkout=${checkout}" >> "${GITHUB_OUTPUT}"
-          echo "release_tag=${release_tag}" >> "${GITHUB_OUTPUT}"
-          echo "release_name=${release_name}" >> "${GITHUB_OUTPUT}"
-          echo "Resolved release: ${release_tag}"
+          with urlopen("https://cef-builds.spotifycdn.com/index.json") as r:
+            index_json = json.load(r)
+
+          versions = set()
+          walk_versions(index_json, versions)
+          parsed = [p for p in (parse_version(v) for v in versions) if p is not None]
+          if not parsed:
+            print("No CEF versions found in spotify index", file=sys.stderr)
+            sys.exit(1)
+
+          if input_value == "latest":
+            chosen = max(
+              parsed,
+              key=lambda p: (
+                p["cef_major"], p["cef_minor"], p["cef_patch"],
+                p["chromium_major"], p["chromium_minor"], p["chromium_branch"], p["chromium_patch"],
+              ),
+            )
+          else:
+            exact = [p for p in parsed if p["raw"] == input_value]
+            prefix = [p for p in parsed if p["raw"].startswith(input_value + "+g")]
+            candidates = exact or prefix
+            if not candidates:
+              print(f"Cannot resolve release version from CEF_VERSION={input_value}", file=sys.stderr)
+              sys.exit(1)
+            chosen = max(
+              candidates,
+              key=lambda p: (
+                p["cef_major"], p["cef_minor"], p["cef_patch"],
+                p["chromium_major"], p["chromium_minor"], p["chromium_branch"], p["chromium_patch"],
+              ),
+            )
+
+          resolved = chosen["raw"]
+          release_tag = f"cef-{resolved}"
+          release_name = f"CEF {resolved}"
+
+          with open(out, "a", encoding="utf-8") as f:
+            f.write(f"checkout={resolved}\n")
+            f.write(f"release_tag={release_tag}\n")
+            f.write(f"release_name={release_name}\n")
+
+          print(f"Resolved release: {release_tag}")
+          PY
 
       - name: Download build artifacts
         uses: actions/download-artifact@v4

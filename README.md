@@ -27,14 +27,20 @@ Scheduled trigger runs weekly.
 `cef_version` resolution rules:
 
 - numeric input like `6533`: treated as `--branch=6533`
-- semantic version/tag input like `132.3.0`: resolves latest matching CEF tag and uses `--checkout=<tag>`
-- `latest`: resolves to latest CEF tag
+- semantic version input like `145.0.26`: resolves latest matching CEF version from `cef-builds.spotifycdn.com/index.json`
+- full CEF version input like `145.0.26+g6ed7554+chromium-145.0.7632.110`: resolves exactly
+- `latest`: resolves to latest CEF version from the same index
+
+For non-numeric input, workflow extracts:
+
+- `--branch=<chromium branch>` (for example `7632`)
+- `--checkout=<cef git short hash>` (for example `6ed7554`)
 
 When `publish_release=true`:
 
-- workflow creates/updates a release tag in the format `cef-<resolved-cef-tag>`
+- workflow creates/updates a release tag in the format `cef-<resolved-cef-version>`
 - all platform artifacts are uploaded as `tar.bz2` bundles
-- `cef_version` must be version/tag (`latest` or semver-like), not raw branch number
+- `cef_version` must be version (`latest`, semver-like, or full CEF version), not raw branch number
 
 ## Codec build flags (FFmpeg/H264/H265/AAC)
 
